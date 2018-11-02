@@ -1,0 +1,7 @@
+apiVersion: clusterreader.sre.openshift.com/v1alpha1
+kind: ClusterReader
+metadata:
+  name: example-clusterreader
+spec:
+  # Add fields here
+  size: 3
