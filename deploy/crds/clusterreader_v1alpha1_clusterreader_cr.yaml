@@ -4,4 +4,7 @@ metadata:
   name: example-clusterreader
 spec:
   # Add fields here
-  size: 3
+  readers:
+    - james
+    - jim
+    - john 

@@ -38,3 +38,9 @@ rules:
   - '*'
   verbs:
   - '*'
+- apiGroups:
+  - contianerset.openshift.io
+  resources:
+  - '*'
+  verbs:
+  - '*'

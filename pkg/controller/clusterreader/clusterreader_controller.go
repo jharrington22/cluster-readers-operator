@@ -3,13 +3,13 @@ package clusterreader
 import (
 	"context"
 	"log"
+	"reflect"
 
 	clusterreaderv1alpha1 "github.com/jharrington22/cluster-readers/pkg/apis/clusterreader/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -51,7 +51,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 
 	// TODO(user): Modify this to be the types you create that are owned by the primary resource
 	// Watch for changes to secondary resource Pods and requeue the owner ClusterReader
-	err = c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
+	err = c.Watch(&source.Kind{Type: &rbacv1.ClusterRoleBinding{}}, &handler.EnqueueRequestForOwner{
 		IsController: true,
 		OwnerType:    &clusterreaderv1alpha1.ClusterReader{},
 	})
@@ -96,54 +96,138 @@ func (r *ReconcileClusterReader) Reconcile(request reconcile.Request) (reconcile
 		return reconcile.Result{}, err
 	}
 
-	// Define a new Pod object
-	pod := newPodForCR(instance)
+	// print out my allowed readers
+	readers := instance.Spec.Readers
 
-	// Set ClusterReader instance as the owner and controller
-	if err := controllerutil.SetControllerReference(instance, pod, r.scheme); err != nil {
+	log.Printf("Readers: %#v\n", readers)
+
+	log.Println("1")
+
+	rbacBindingList := &rbacv1.ClusterRoleBindingList{}
+
+	log.Println("2")
+
+	listOptions := &client.ListOptions{}
+
+	log.Println("3")
+
+	r.client.List(context.TODO(), listOptions, rbacBindingList)
+
+	log.Println("4")
+
+	clusterRoleBindingExists := roleBindingInList(instance.Name, rbacBindingList)
+
+	clusterRoleBinding := createClusterRoleBinding(instance)
+
+	// TODO clean this up clusterRoleBindingExists should just be the existing resource or a new one
+	if clusterRoleBindingExists {
+		log.Printf("Role Binding %s exist!\n", instance.Name)
+		clusterRoleBinding = getClusterRoleBinding(instance.Name, rbacBindingList)
+	} else {
+		log.Printf("Role Binding %s doesn't exist!\n", instance.Name)
+	}
+
+	if err != nil {
+		log.Println("Error retriving cluster role bindings")
+	}
+
+	log.Println("5")
+
+	if err := controllerutil.SetControllerReference(instance, clusterRoleBinding, r.scheme); err != nil {
 		return reconcile.Result{}, err
 	}
 
-	// Check if this Pod already exists
-	found := &corev1.Pod{}
-	err = r.client.Get(context.TODO(), types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, found)
-	if err != nil && errors.IsNotFound(err) {
-		log.Printf("Creating a new Pod %s/%s\n", pod.Namespace, pod.Name)
-		err = r.client.Create(context.TODO(), pod)
+	if !clusterRoleBindingExists {
+		err := r.client.Create(context.TODO(), clusterRoleBinding)
 		if err != nil {
-			return reconcile.Result{}, err
+			log.Printf("Error creating role binding %s\n", clusterRoleBinding.Name)
 		}
-
-		// Pod created successfully - don't requeue
-		return reconcile.Result{}, nil
-	} else if err != nil {
-		return reconcile.Result{}, err
+		log.Printf("Created cluster role binding %s\n", clusterRoleBinding.Name)
 	}
 
-	// Pod already exists - don't requeue
-	log.Printf("Skip reconcile: Pod %s/%s already exists", found.Namespace, found.Name)
+	if clusterRoleBindingExists {
+		if verifyClusterRoleBindingUsers(instance, clusterRoleBinding) {
+			log.Println("Users are the same all good!")
+		} else {
+			log.Println("Error list has been modified re create!")
+		}
+	}
+
 	return reconcile.Result{}, nil
 }
 
-// newPodForCR returns a busybox pod with the same name/namespace as the cr
-func newPodForCR(cr *clusterreaderv1alpha1.ClusterReader) *corev1.Pod {
+// createRBACGroup
+func createRBACGroup(cr *clusterreaderv1alpha1.ClusterReader) {
+}
+
+func roleBindingInList(name string, list *rbacv1.ClusterRoleBindingList) bool {
+	for _, binding := range list.Items {
+		if name == binding.Name {
+			return true
+		}
+	}
+	return false
+}
+
+func createSubjects(cr *clusterreaderv1alpha1.ClusterReader) []rbacv1.Subject {
+	var subjects []rbacv1.Subject
+	for _, name := range cr.Spec.Readers {
+		subject := rbacv1.Subject{
+			Kind:      "User",
+			Namespace: cr.Namespace,
+			Name:      name,
+			APIGroup:  "rbac.authorization.k8s.io",
+		}
+		subjects = append(subjects, subject)
+	}
+	return subjects
+}
+
+// createClusterRoleBinding
+func createClusterRoleBinding(cr *clusterreaderv1alpha1.ClusterReader) *rbacv1.ClusterRoleBinding {
+	subjects := createSubjects(cr)
+
 	labels := map[string]string{
 		"app": cr.Name,
 	}
-	return &corev1.Pod{
+	return &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      cr.Name + "-pod",
+			Name:      cr.Name,
 			Namespace: cr.Namespace,
 			Labels:    labels,
 		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name:    "busybox",
-					Image:   "busybox",
-					Command: []string{"sleep", "3600"},
-				},
-			},
+		Subjects: subjects,
+		RoleRef: rbacv1.RoleRef{
+			Kind: "ClusterRole",
+			Name: "cluster-reader",
 		},
 	}
+}
+
+// verifyClusterRoleBindingUsers verify users in the CR are the only users in the ClusterRoleBinding
+func verifyClusterRoleBindingUsers(cr *clusterreaderv1alpha1.ClusterReader, clusterRoleBinding *rbacv1.ClusterRoleBinding) bool {
+	var clusterRoleBindingUsers []string
+	for _, subject := range clusterRoleBinding.Subjects {
+		clusterRoleBindingUsers = append(clusterRoleBindingUsers, subject.Name)
+	}
+	if reflect.DeepEqual(cr.Spec.Readers, clusterRoleBindingUsers) {
+		log.Printf("clusterRoleBindingUsers: %v", clusterRoleBindingUsers)
+		log.Printf("clusterReaderUsers: %v", cr.Spec.Readers)
+		return true
+	}
+	log.Printf("clusterRoleBindingUsers: %v", clusterRoleBindingUsers)
+	log.Printf("clusterReaderUsers: %v", cr.Spec.Readers)
+	return false
+}
+
+// getClusterRoleBinding
+func getClusterRoleBinding(name string, clusterRoleBindingList *rbacv1.ClusterRoleBindingList) *rbacv1.ClusterRoleBinding {
+	var binding rbacv1.ClusterRoleBinding
+	for _, binding := range clusterRoleBindingList.Items {
+		if name == binding.Name {
+			return &binding
+		}
+	}
+	// TODO return an actual error
+	return &binding
 }
