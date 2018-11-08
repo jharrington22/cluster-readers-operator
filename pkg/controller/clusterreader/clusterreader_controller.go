@@ -49,8 +49,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
-	// TODO(user): Modify this to be the types you create that are owned by the primary resource
-	// Watch for changes to secondary resource Pods and requeue the owner ClusterReader
+	// Watch for changes to secondary resource ClusterRoleBinding and requeue the owner ClusterReader
 	err = c.Watch(&source.Kind{Type: &rbacv1.ClusterRoleBinding{}}, &handler.EnqueueRequestForOwner{
 		IsController: true,
 		OwnerType:    &clusterreaderv1alpha1.ClusterReader{},
@@ -74,8 +73,6 @@ type ReconcileClusterReader struct {
 
 // Reconcile reads that state of the cluster for a ClusterReader object and makes changes based on the state read
 // and what is in the ClusterReader.Spec
-// TODO(user): Modify this Reconcile function to implement your Controller logic.  This example creates
-// a Pod as an example
 // Note:
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
@@ -96,10 +93,9 @@ func (r *ReconcileClusterReader) Reconcile(request reconcile.Request) (reconcile
 		return reconcile.Result{}, err
 	}
 
-	// print out my allowed readers
 	readers := instance.Spec.Readers
 
-	log.Printf("Cluster readers: %#v\n", readers)
+	log.Printf("Cluster readers: %v\n", readers)
 
 	rbacBindingList := &rbacv1.ClusterRoleBindingList{}
 
@@ -140,13 +136,11 @@ func (r *ReconcileClusterReader) Reconcile(request reconcile.Request) (reconcile
 			log.Println("Cluster readers are the same all good!")
 		} else {
 			newClusterRoleBinding := createClusterRoleBinding(instance)
+			// Make sure we apply the owner reference to the new object
 			if err := controllerutil.SetControllerReference(instance, newClusterRoleBinding, r.scheme); err != nil {
 				return reconcile.Result{}, err
 			}
 			replaceClusterRoleBinding(instance.Name, clusterRoleBinding, newClusterRoleBinding, r)
-			if err := controllerutil.SetControllerReference(instance, newClusterRoleBinding, r.scheme); err != nil {
-				return reconcile.Result{}, err
-			}
 		}
 	}
 
@@ -155,10 +149,7 @@ func (r *ReconcileClusterReader) Reconcile(request reconcile.Request) (reconcile
 	return reconcile.Result{}, nil
 }
 
-// createRBACGroup
-func createRBACGroup(cr *clusterreaderv1alpha1.ClusterReader) {
-}
-
+// roleBindingInList return a bool if there is a role binding with `name`
 func roleBindingInList(name string, list *rbacv1.ClusterRoleBindingList) bool {
 	for _, binding := range list.Items {
 		if name == binding.Name {
@@ -168,6 +159,7 @@ func roleBindingInList(name string, list *rbacv1.ClusterRoleBindingList) bool {
 	return false
 }
 
+// createSubjects creates a slice of RBAC subjects based on the the CR.Spec.Readers list
 func createSubjects(cr *clusterreaderv1alpha1.ClusterReader) []rbacv1.Subject {
 	var subjects []rbacv1.Subject
 	for _, name := range cr.Spec.Readers {
@@ -182,7 +174,7 @@ func createSubjects(cr *clusterreaderv1alpha1.ClusterReader) []rbacv1.Subject {
 	return subjects
 }
 
-// createClusterRoleBinding
+// createClusterRoleBinding creates the cluster role binding
 func createClusterRoleBinding(cr *clusterreaderv1alpha1.ClusterReader) *rbacv1.ClusterRoleBinding {
 	subjects := createSubjects(cr)
 
@@ -228,6 +220,7 @@ func getClusterRoleBinding(name string, clusterRoleBindingList *rbacv1.ClusterRo
 	return &binding
 }
 
+// repalceClusterRoleBinding deletes and the re-creates cluster role binding
 func replaceClusterRoleBinding(name string, clusterRoleBinding *rbacv1.ClusterRoleBinding, newClusterRoleBinding *rbacv1.ClusterRoleBinding, r *ReconcileClusterReader) bool {
 	err := r.client.Delete(context.TODO(), clusterRoleBinding)
 	if err != nil {
