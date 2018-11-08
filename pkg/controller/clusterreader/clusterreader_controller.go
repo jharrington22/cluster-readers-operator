@@ -99,21 +99,13 @@ func (r *ReconcileClusterReader) Reconcile(request reconcile.Request) (reconcile
 	// print out my allowed readers
 	readers := instance.Spec.Readers
 
-	log.Printf("Readers: %#v\n", readers)
-
-	log.Println("1")
+	log.Printf("Cluster readers: %#v\n", readers)
 
 	rbacBindingList := &rbacv1.ClusterRoleBindingList{}
 
-	log.Println("2")
-
 	listOptions := &client.ListOptions{}
 
-	log.Println("3")
-
 	r.client.List(context.TODO(), listOptions, rbacBindingList)
-
-	log.Println("4")
 
 	clusterRoleBindingExists := roleBindingInList(instance.Name, rbacBindingList)
 
@@ -131,8 +123,6 @@ func (r *ReconcileClusterReader) Reconcile(request reconcile.Request) (reconcile
 		log.Println("Error retriving cluster role bindings")
 	}
 
-	log.Println("5")
-
 	if err := controllerutil.SetControllerReference(instance, clusterRoleBinding, r.scheme); err != nil {
 		return reconcile.Result{}, err
 	}
@@ -147,14 +137,21 @@ func (r *ReconcileClusterReader) Reconcile(request reconcile.Request) (reconcile
 
 	if clusterRoleBindingExists {
 		if verifyClusterRoleBindingUsers(instance, clusterRoleBinding) {
-			log.Println("Users are the same all good!")
+			log.Println("Cluster readers are the same all good!")
 		} else {
-			log.Println("Error list has been modified re create!")
 			newClusterRoleBinding := createClusterRoleBinding(instance)
+			if err := controllerutil.SetControllerReference(instance, newClusterRoleBinding, r.scheme); err != nil {
+				return reconcile.Result{}, err
+			}
 			replaceClusterRoleBinding(instance.Name, clusterRoleBinding, newClusterRoleBinding, r)
+			if err := controllerutil.SetControllerReference(instance, newClusterRoleBinding, r.scheme); err != nil {
+				return reconcile.Result{}, err
+			}
 		}
 	}
 
+	log.Println("Reconcile finished")
+	log.Println("")
 	return reconcile.Result{}, nil
 }
 
@@ -194,9 +191,8 @@ func createClusterRoleBinding(cr *clusterreaderv1alpha1.ClusterReader) *rbacv1.C
 	}
 	return &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      cr.Name,
-			Namespace: cr.Namespace,
-			Labels:    labels,
+			Name:   cr.Name,
+			Labels: labels,
 		},
 		Subjects: subjects,
 		RoleRef: rbacv1.RoleRef{
@@ -213,12 +209,10 @@ func verifyClusterRoleBindingUsers(cr *clusterreaderv1alpha1.ClusterReader, clus
 		clusterRoleBindingUsers = append(clusterRoleBindingUsers, subject.Name)
 	}
 	if reflect.DeepEqual(cr.Spec.Readers, clusterRoleBindingUsers) {
-		log.Printf("clusterRoleBindingUsers: %v\n", clusterRoleBindingUsers)
-		log.Printf("clusterReaderUsers: %v\n", cr.Spec.Readers)
 		return true
 	}
-	log.Printf("clusterRoleBindingUsers: %v\n", clusterRoleBindingUsers)
-	log.Printf("clusterReaderUsers: %v\n", cr.Spec.Readers)
+
+	log.Printf("Cluster readers are different re-creating RBAC role!\n")
 	return false
 }
 
