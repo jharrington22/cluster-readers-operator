@@ -150,6 +150,8 @@ func (r *ReconcileClusterReader) Reconcile(request reconcile.Request) (reconcile
 			log.Println("Users are the same all good!")
 		} else {
 			log.Println("Error list has been modified re create!")
+			newClusterRoleBinding := createClusterRoleBinding(instance)
+			replaceClusterRoleBinding(instance.Name, clusterRoleBinding, newClusterRoleBinding, r)
 		}
 	}
 
@@ -211,12 +213,12 @@ func verifyClusterRoleBindingUsers(cr *clusterreaderv1alpha1.ClusterReader, clus
 		clusterRoleBindingUsers = append(clusterRoleBindingUsers, subject.Name)
 	}
 	if reflect.DeepEqual(cr.Spec.Readers, clusterRoleBindingUsers) {
-		log.Printf("clusterRoleBindingUsers: %v", clusterRoleBindingUsers)
-		log.Printf("clusterReaderUsers: %v", cr.Spec.Readers)
+		log.Printf("clusterRoleBindingUsers: %v\n", clusterRoleBindingUsers)
+		log.Printf("clusterReaderUsers: %v\n", cr.Spec.Readers)
 		return true
 	}
-	log.Printf("clusterRoleBindingUsers: %v", clusterRoleBindingUsers)
-	log.Printf("clusterReaderUsers: %v", cr.Spec.Readers)
+	log.Printf("clusterRoleBindingUsers: %v\n", clusterRoleBindingUsers)
+	log.Printf("clusterReaderUsers: %v\n", cr.Spec.Readers)
 	return false
 }
 
@@ -230,4 +232,18 @@ func getClusterRoleBinding(name string, clusterRoleBindingList *rbacv1.ClusterRo
 	}
 	// TODO return an actual error
 	return &binding
+}
+
+func replaceClusterRoleBinding(name string, clusterRoleBinding *rbacv1.ClusterRoleBinding, newClusterRoleBinding *rbacv1.ClusterRoleBinding, r *ReconcileClusterReader) bool {
+	err := r.client.Delete(context.TODO(), clusterRoleBinding)
+	if err != nil {
+		log.Printf("Error deleting existing cluster role binding: %s\n", clusterRoleBinding.Name)
+		return false
+	}
+	err = r.client.Create(context.TODO(), newClusterRoleBinding)
+	if err != nil {
+		log.Printf("Error creating existing cluster role binding: %s\n", clusterRoleBinding.Name)
+		return false
+	}
+	return true
 }
